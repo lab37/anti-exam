@@ -25,7 +25,7 @@
 
 - 设置手机代理。手机连接wifi后进行代理设置，代理IP为个人pc的内网ip地址,以及端口为8998,移动网络下可通过设置新建APN并在其中设置代理的方式实现。如：
 <div align="center">    
- <img src="./docs/3.jpeg" width = "300" alt="配置代理" align=center />
+ <img src="./docs/1.jpeg" width = "300" alt="配置代理" align=center />
 </div> 
 
 - 安装证书。代理运行成功后,手机浏览器访问 `abc.com`安装证书,ios记得要信任证书 (或者将 `certs/goproxy.crt`传到手机, 点击安装证书), 很多朋友会卡在安装证书这一步骤, 不同手机会有不同的安装方式,建议大家多搜索下自己机型如何安装证书
