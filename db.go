@@ -4,15 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	//bolt是一个k-v数据库。很简单高效的一种。
 	//bolt中的表叫bucket（桶），每次操作看为一个事务
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/boltdb/bolt"
 )
 
@@ -96,30 +92,6 @@ func getAnswerFromDb(question *Question) (answerStr string) {
 		return nil
 	})
 	return
-}
-
-//从百度搜索结果中统计出每个答案选项出现的次数，以这个出现次数做为比较哪个答案对的依据.
-func getAnswerFromBaidu(quiz string, options []string) map[string]int {
-	values := url.Values{}
-	values.Add("wd", quiz)
-	req, _ := http.NewRequest("GET", "http://www.baidu.com/s?"+values.Encode(), nil)
-	ans := make(map[string]int, len(options))
-	for _, option := range options {
-		ans[option] = 0
-	}
-	resp, _ := http.DefaultClient.Do(req)
-	if resp == nil {
-		return ans
-	}
-	//解析返回的文档，变成jquery那样的文档对象模型
-	doc, _ := goquery.NewDocumentFromReader(resp.Body)
-	defer resp.Body.Close()
-	str := doc.Find("#content_left .result").Text()
-	//统计答案在搜索结果中出现的个数，得到一个每个选项的可能性大小
-	for _, option := range options {
-		ans[option] = strings.Count(str, option)
-	}
-	return ans
 }
 
 //取得问题的最后更新时间，-1代表没有找到问题

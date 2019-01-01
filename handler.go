@@ -31,8 +31,8 @@ type Question struct {
 	CalData struct {
 		RoomID     string
 		quizNum    string
-		Answer     string
-		TrueAnswer string
+		Answer     string //选择的答案
+		TrueAnswer string //正确答案
 	} `json:"-"`
 }
 
@@ -62,79 +62,85 @@ func setRoomIdByRequest(bs []byte) {
 }
 
 //搜索答案并把答案插入response中，返回修改后的影响和答案所在屏幕位置
-func getAndInsertAnswerIntoResponse(bs []byte) (bsNew []byte, ansPos int) {
+func getAndInsertAnswerIntoResponse(bs []byte) (bsNew []byte, answerPosition int) {
 	bsNew = bs
-	question := &Question{}
-	json.Unmarshal(bs, question)
-	question.CalData.RoomID = roomID
-	question.CalData.quizNum = strconv.Itoa(question.Data.Num)
+	originalQuestion := &Question{}
+	json.Unmarshal(bs, originalQuestion)
+	originalQuestion.CalData.RoomID = roomID
+	originalQuestion.CalData.quizNum = strconv.Itoa(originalQuestion.Data.Num)
 
-	//从数据库中取得这个问题的答案
-	answer := getAnswerFromDb(question)
-	var ret map[string]int
-	//如果库中没有，则用百度搜
+	var optionsWithCounting map[string]int
+	//优先从数据库中取得这个问题的答案，如果库中没有，则用百度搜
+	answer := getAnswerFromDb(originalQuestion)
 	if answer == "" {
 		tx := time.Now()
-		ret = getAnswerFromBaidu(question.Data.Quiz, question.Data.Options)
+		optionsWithCounting = getAnswerFromBaidu(originalQuestion.Data.Quiz, originalQuestion.Data.Options)
 		tx2 := time.Now()
 		//输出搜索消耗的时间
 		log.Printf("Cost time %d ms\n", tx2.Sub(tx).Nanoseconds()/1e6)
 	}
-	question.CalData.TrueAnswer = answer
-	question.CalData.Answer = answer
+
+	originalQuestion.CalData.TrueAnswer = answer
+	originalQuestion.CalData.Answer = answer
+
 	//缓存考题
-	putQuestionInCache(question)
+	putQuestionInCache(originalQuestion)
 
-	ansPos = 0
-	//重新解析一下返回的题目到一个新变量中
-	respQuestion := &Question{}
-	json.Unmarshal(bs, respQuestion)
+	answerPosition = 0
 
-	if question.CalData.TrueAnswer != "" {
+	//生成带答案的试题
+	cheatedQuestion := &Question{}
+	json.Unmarshal(bs, cheatedQuestion)
+
+	if originalQuestion.CalData.TrueAnswer != "" {
 		//若此题在题库中
-		for i, option := range respQuestion.Data.Options {
-			if option == question.CalData.TrueAnswer {
+		for i, option := range cheatedQuestion.Data.Options {
+			if option == originalQuestion.CalData.TrueAnswer {
 				//在问题的答案中正确选项后面加上4个字
-				respQuestion.Data.Options[i] = option + "[标准答案]"
-				ansPos = i + 1
+				cheatedQuestion.Data.Options[i] = option + "[标准答案]"
+				answerPosition = i + 1
 				break
 			}
 		}
 	} else {
 		//若此题不在题库中
 		var max int = 0
-		for i, option := range respQuestion.Data.Options {
-			if ret[option] > 0 {
+		for i, option := range cheatedQuestion.Data.Options {
+			if optionsWithCounting[option] > 0 {
 				//在问题的答案的每个选项后面加上这个选项在百度中出现的次数（频率）
-				respQuestion.Data.Options[i] = option + "[" + strconv.Itoa(ret[option]) + "]"
-				if ret[option] > max {
-					max = ret[option]
-					ansPos = i + 1
+				cheatedQuestion.Data.Options[i] = option + "[" + strconv.Itoa(optionsWithCounting[option]) + "]"
+				if optionsWithCounting[option] > max {
+					max = optionsWithCounting[option]
+					answerPosition = i + 1
 				}
 			}
 		}
 	}
-	//重新封好这个修改好的题目
-	bsNew, _ = json.Marshal(respQuestion)
 
+	//重新封好这个修改好的题目
+	bsNew, _ = json.Marshal(cheatedQuestion)
 	var out bytes.Buffer
 	json.Indent(&out, bsNew, "", " ")
-	var answerItem string = "不知道"
-	if ansPos != 0 {
-		answerItem = respQuestion.Data.Options[ansPos-1]
-	} else {
-		//随机点击
-		ansPos = rand.Intn(4) + 1
-	}
-	log.Printf("Question answer predict =>\n 【题目】 %v\n 【正确答案】%v\n", respQuestion.Data.Quiz, answerItem)
 
-	//直接将答案返回在客户端,可能导致封号,所以只在服务端显示
-	if mode == 0 {
-		//返回修改后的答案
-		return out.Bytes(), ansPos
+	var answerItem string = "不知道"
+
+	//题目找到了答案
+	if answerPosition != 0 {
+		answerItem = cheatedQuestion.Data.Options[answerPosition-1]
 	} else {
-		//返回答案
-		return bs, ansPos
+		//题不在题库并且百度也没搜到，则生成一个随机位置
+		answerPosition = rand.Intn(4) + 1
+	}
+
+	//在电脑上显示答案是什么
+	log.Printf("Question answer predict =>\n 【题目】 %v\n 【正确答案】%v\n", cheatedQuestion.Data.Quiz, answerItem)
+
+	if mode == 0 {
+		//返回修改后的考题
+		return out.Bytes(), answerPosition
+	} else {
+		//返回原题和答案的位置
+		return bs, answerPosition
 	}
 }
 
