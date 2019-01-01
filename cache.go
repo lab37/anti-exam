@@ -24,7 +24,7 @@ func getQuestionFromCache(roomID, quizNum string) *Question {
 }
 
 //以房间号和考试号为key把考题存入缓存中
-func setQuestionToCache(question *Question) {
+func putQuestionInCache(question *Question) {
 	key := question.CalData.RoomID + "_" + question.CalData.quizNum
 	questionInCache.Set(key, question, cache.DefaultExpiration)
 }

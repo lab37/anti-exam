@@ -2,13 +2,8 @@ package main
 
 import (
 	"flag"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
-
-	"github.com/PuerkitoBio/goquery"
 )
 
 // 模式一: 默认模式, 修改了服务端返回的数据, 更加友好地提示正确答案, 运行方式如上所述: ./brain 或者源码下执行 go run main.go
@@ -19,49 +14,21 @@ import (
 //        心y坐标。运行方式如上所述 ./brain -a 1 -m 1 或者源码下执行 go run main.go -a 1 -m 1
 var (
 	mode      int
-	automatic int
+	autoMatic int
 )
 
 func init() {
 	flag.IntVar(&mode, "m", 0, "run mode 0 : default mode, easy to be detected of cheating; 1 : invisible mode")
-	flag.IntVar(&automatic, "a", 0, "run automatic  0 : manual  1 : automatic")
+	flag.IntVar(&autoMatic, "a", 0, "run automatic  0 : manual  1 : automatic")
 	flag.Parse()
 }
 
 func main() {
 	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt, os.Kill)
+	signal.Notify(c, os.Interrupt, os.Kill) //只接收系统中断和结束信号
 	go func() {
-		run("8998", mode, automatic)
+		startProxyServer("8998")
 	}()
 	<-c
-	close()
-}
-
-var (
-	baidu_url = "http://www.baidu.com/s?"
-)
-
-//从百度搜索结果中统计出每个答案选项出现的次数，以这个出现次数做为比较哪个答案对的依据.
-func getAnswerFromBaidu(quiz string, options []string) map[string]int {
-	values := url.Values{}
-	values.Add("wd", quiz)
-	req, _ := http.NewRequest("GET", baidu_url+values.Encode(), nil)
-	ans := make(map[string]int, len(options))
-	for _, option := range options {
-		ans[option] = 0
-	}
-	resp, _ := http.DefaultClient.Do(req)
-	if resp == nil {
-		return ans
-	}
-	//解析返回的文档，变成jquery那样的文档对象模型
-	doc, _ := goquery.NewDocumentFromReader(resp.Body)
-	defer resp.Body.Close()
-	str := doc.Find("#content_left .result").Text()
-	//统计答案在搜索结果中出现的个数，得到一个每个选项的可能性大小
-	for _, option := range options {
-		ans[option] = strings.Count(str, option)
-	}
-	return ans
+	closeProxyServer()
 }

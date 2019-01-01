@@ -4,18 +4,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	//bolt是一个k-v数据库。很简单高效的一种。
 	//bolt中的表叫bucket（桶），每次操作看为一个事务
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/boltdb/bolt"
 )
 
-//问题的一部分，答案和答案的更正时间
-type QuestionCols struct {
+//正确答案和答案的更正时间
+type CorrectAnswer struct {
 	Answer string `json:"a"`
 	Update int64  `json:"ts"`
+}
+
+//生成考题的答案部分
+func newCorrectAnswer(answer string, update int64) *CorrectAnswer {
+	return &CorrectAnswer{
+		Answer: answer,
+		Update: update,
+	}
+}
+
+//json编码这个试题的答案部分
+func (q *CorrectAnswer) unmarshal(bs []byte) {
+	json.Unmarshal(bs, q)
+}
+
+//json编码这个试题的答案部分
+func (q *CorrectAnswer) marshal() []byte {
+	bs, _ := json.Marshal(q)
+	return bs
 }
 
 var (
@@ -31,7 +54,7 @@ func init() {
 		log.Fatal(err)
 	}
 	memoryDb.Update(func(tx *bolt.Tx) error {
-		//如果不存在问题桶就创建一个
+		//如果不存在题库桶就创建一个
 		_, err := tx.CreateBucketIfNotExists([]byte(QuestionBucket))
 		if err != nil {
 			return fmt.Errorf("create bucket: %s", err)
@@ -47,44 +70,70 @@ func storeQuestionToDb(question *Question) error {
 		return memoryDb.Update(func(tx *bolt.Tx) error {
 			//打开一个要操作的桶
 			b := tx.Bucket([]byte(QuestionBucket))
-			v := newQuestionCols(question.CalData.TrueAnswer)
-			err := b.Put([]byte(question.Data.Quiz), v.encodeQuestionCols())
+			v := newCorrectAnswer(question.CalData.TrueAnswer, time.Now().Unix())
+			//题库中只存储题干的题目和正确答案以及答案的最新正确时间。
+			err := b.Put([]byte(question.Data.Quiz), v.marshal())
 			return err
 		})
 	}
 	return nil
 }
 
-//查询一个问题的答案
-func getAnswerInDb(question *Question) (str string) {
+//从题库中查询一个问题的答案
+func getAnswerFromDb(question *Question) (answerStr string) {
+	//从库中找题的答案部分，查到了为答案，没查到答案为空
 	memoryDb.View(func(tx *bolt.Tx) error {
 
 		b := tx.Bucket([]byte(QuestionBucket))
 		v := b.Get([]byte(question.Data.Quiz))
-		if len(v) == 0 {
+		if len(v) == 0 { //没查到
 			//必须反回nil，证明错误不是出在查询系统
 			return nil
 		}
-		//得到问题结构的一部分，并更新问题的最后刷新时间
-		q := decodeQuestionCols(v, time.Now().Unix())
-		str = q.Answer
+		q := newCorrectAnswer("", time.Now().Unix())
+		q.unmarshal(v)
+		answerStr = q.Answer
 		return nil
 	})
 	return
 }
 
-//取得问题的最后更新时间，-1代表没有找到问题，现在时间表代表找到了
-func FetchQuestionTime(quiz string) (res int64) {
+//从百度搜索结果中统计出每个答案选项出现的次数，以这个出现次数做为比较哪个答案对的依据.
+func getAnswerFromBaidu(quiz string, options []string) map[string]int {
+	values := url.Values{}
+	values.Add("wd", quiz)
+	req, _ := http.NewRequest("GET", "http://www.baidu.com/s?"+values.Encode(), nil)
+	ans := make(map[string]int, len(options))
+	for _, option := range options {
+		ans[option] = 0
+	}
+	resp, _ := http.DefaultClient.Do(req)
+	if resp == nil {
+		return ans
+	}
+	//解析返回的文档，变成jquery那样的文档对象模型
+	doc, _ := goquery.NewDocumentFromReader(resp.Body)
+	defer resp.Body.Close()
+	str := doc.Find("#content_left .result").Text()
+	//统计答案在搜索结果中出现的个数，得到一个每个选项的可能性大小
+	for _, option := range options {
+		ans[option] = strings.Count(str, option)
+	}
+	return ans
+}
+
+//取得问题的最后更新时间，-1代表没有找到问题
+func getUpdateTimeOfAnswer(quiz string) (updateTime int64) {
 	memoryDb.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(QuestionBucket))
 		v := b.Get([]byte(quiz))
 		if len(v) == 0 {
-			res = -1
+			updateTime = -1
 			return nil
 		}
-		//取得答案部分并装更新时间刷新为现在
-		q := decodeQuestionCols(v, time.Now().Unix())
-		res = q.Update
+		q := newCorrectAnswer("", time.Now().Unix())
+		q.unmarshal(v)
+		updateTime = q.Update
 		return nil
 	})
 	return
@@ -142,11 +191,12 @@ func mergeQuestions(fs ...string) {
 				memoryDb.Update(func(tx *bolt.Tx) error {
 					b := tx.Bucket([]byte(QuestionBucket))
 					//三方包的时间
-					q := decodeQuestionCols(v, 0)
+					q := newCorrectAnswer("", 0)
+					q.unmarshal(v)
 					//数据库中的时间
-					if q.Update > FetchQuestionTime(string(k)) {
+					if q.Update > getUpdateTimeOfAnswer(string(k)) {
 						i++
-						b.Put(k, q.encodeQuestionCols())
+						b.Put(k, q.marshal())
 					}
 					return nil
 				})
@@ -156,33 +206,6 @@ func mergeQuestions(fs ...string) {
 		})
 	}
 	log.Println("merged", i, "questions")
-}
-
-//生成考题的答案部分
-func newQuestionCols(answer string) *QuestionCols {
-	return &QuestionCols{
-		Answer: answer,
-		Update: time.Now().Unix(),
-	}
-}
-
-//解码一个考题的答案部分，并设置一下答案的更日期，能用json解就解，解不了直接转换为string算了。
-func decodeQuestionCols(bs []byte, update int64) *QuestionCols {
-	var q = &QuestionCols{}
-	err := json.Unmarshal(bs, q)
-	if err == nil {
-		return q
-	} else {
-		q = newQuestionCols(string(bs))
-		q.Update = update
-	}
-	return q
-}
-
-//json编码这个试题的答案部分
-func (q *QuestionCols) encodeQuestionCols() []byte {
-	bs, _ := json.Marshal(q)
-	return bs
 }
 
 func max(a, b int64) int64 {

@@ -15,6 +15,7 @@ var (
 )
 
 type Question struct {
+	//题干部分
 	Data struct {
 		Quiz        string   `json:"quiz"`
 		Options     []string `json:"options"`
@@ -26,7 +27,7 @@ type Question struct {
 		CurTime     int      `json:"curTime"`
 	} `json:"data"`
 	Errcode int `json:"errcode"`
-
+	//答案部分
 	CalData struct {
 		RoomID     string
 		quizNum    string
@@ -35,7 +36,7 @@ type Question struct {
 	} `json:"-"`
 }
 
-type ChooseResp struct {
+type PKResult struct {
 	Data struct {
 		UID         int  `json:"uid"`
 		Num         int  `json:"num"`
@@ -54,14 +55,14 @@ type ChooseResp struct {
 	Errcode int `json:"errcode"`
 }
 
-//在http请求的Url中解析出roomID
-func handleQuestionReq(bs []byte) {
+//根据http请求的Url中解析出roomID，并设置全局变量roomID
+func setRoomIdByRequest(bs []byte) {
 	values, _ := url.ParseQuery(string(bs))
 	roomID = values.Get("roomID")
 }
 
-//根据服务器返回的题目,进行答案搜索，
-func handleQuestionResp(bs []byte) (bsNew []byte, ansPos int) {
+//搜索答案并把答案插入response中，返回修改后的影响和答案所在屏幕位置
+func getAndInsertAnswerIntoResponse(bs []byte) (bsNew []byte, ansPos int) {
 	bsNew = bs
 	question := &Question{}
 	json.Unmarshal(bs, question)
@@ -69,7 +70,7 @@ func handleQuestionResp(bs []byte) (bsNew []byte, ansPos int) {
 	question.CalData.quizNum = strconv.Itoa(question.Data.Num)
 
 	//从数据库中取得这个问题的答案
-	answer := getAnswerInDb(question)
+	answer := getAnswerFromDb(question)
 	var ret map[string]int
 	//如果库中没有，则用百度搜
 	if answer == "" {
@@ -82,7 +83,7 @@ func handleQuestionResp(bs []byte) (bsNew []byte, ansPos int) {
 	question.CalData.TrueAnswer = answer
 	question.CalData.Answer = answer
 	//缓存考题
-	setQuestionToCache(question)
+	putQuestionInCache(question)
 
 	ansPos = 0
 	//重新解析一下返回的题目到一个新变量中
@@ -128,7 +129,7 @@ func handleQuestionResp(bs []byte) (bsNew []byte, ansPos int) {
 	log.Printf("Question answer predict =>\n 【题目】 %v\n 【正确答案】%v\n", respQuestion.Data.Quiz, answerItem)
 
 	//直接将答案返回在客户端,可能导致封号,所以只在服务端显示
-	if Mode == 0 {
+	if mode == 0 {
 		//返回修改后的答案
 		return out.Bytes(), ansPos
 	} else {
@@ -137,33 +138,20 @@ func handleQuestionResp(bs []byte) (bsNew []byte, ansPos int) {
 	}
 }
 
-//hijack 提交请求
-func handleChooseReq(bs []byte) (newBs []byte) {
-	newBs = bs
-	values, _ := url.ParseQuery(string(bs))
-	quizNum := values.Get("quizNum")
-	question := getQuestionFromCache(roomID, quizNum)
+//根据pk结果把问题和正确答案存储到本地题库
+func saveQuestionAndAnswerOfPkResult(bs []byte) {
+	pkResult := &PKResult{}
+	json.Unmarshal(bs, pkResult)
+
+	//log.Println("response choose", roomID, pkResult.Data.Num, string(bs))
+	question := getQuestionFromCache(roomID, strconv.Itoa(pkResult.Data.Num))
 	if question == nil {
+		log.Println("error in get question", pkResult.Data.RoomID, pkResult.Data.Num)
 		return
 	}
-
-	return
-}
-
-//把问题存储到本地题库
-func handleChooseResponse(bs []byte) {
-	chooseResp := &ChooseResp{}
-	json.Unmarshal(bs, chooseResp)
-
-	//log.Println("response choose", roomID, chooseResp.Data.Num, string(bs))
-	question := getQuestionFromCache(roomID, strconv.Itoa(chooseResp.Data.Num))
-	if question == nil {
-		log.Println("error in get question", chooseResp.Data.RoomID, chooseResp.Data.Num)
-		return
-	}
-	question.CalData.TrueAnswer = question.Data.Options[chooseResp.Data.Answer-1]
-	if chooseResp.Data.Yes {
-		question.CalData.TrueAnswer = question.Data.Options[chooseResp.Data.Option-1]
+	question.CalData.TrueAnswer = question.Data.Options[pkResult.Data.Answer-1]
+	if pkResult.Data.Yes {
+		question.CalData.TrueAnswer = question.Data.Options[pkResult.Data.Option-1]
 	}
 	log.Printf("【保存数据】  %s, %s", question.Data.Quiz, question.CalData.TrueAnswer)
 	storeQuestionToDb(question)
